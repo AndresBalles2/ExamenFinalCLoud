@@ -1,0 +1,63 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Stack 2 - Public EC2 with Apache and Elastic IP
+
+Parameters:
+  Ec2SecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security Group Id for EC2 instance (from security stack)
+
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t2.micro
+      - t3.micro
+      - t3.small
+
+  AmiId:
+    Type: AWS::EC2::Image::Id
+    Default: ami-0cca150d127c2216f
+    Description: Amazon Linux AMI Id for us-east-1
+
+Resources:
+  WebInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      SecurityGroupIds:
+        - !Ref Ec2SecurityGroupId
+      UserData: !Base64 |
+        #!/bin/bash
+        yum update -y
+        yum install -y httpd
+        systemctl enable httpd
+        systemctl start httpd
+        echo "Stack 2 - EC2 estatica funcionando" > /var/www/html/index.html
+      Tags:
+        - Key: Name
+          Value: exam-ec2-static
+
+  WebElasticIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  WebElasticIpAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt WebElasticIp.AllocationId
+      InstanceId: !Ref WebInstance
+
+Outputs:
+  InstanceId:
+    Description: Id of the launched EC2 instance
+    Value: !Ref WebInstance
+
+  ElasticIp:
+    Description: Elastic IP associated to the instance
+    Value: !Ref WebElasticIp
+
+  ElasticIpAllocationId:
+    Description: Allocation Id of Elastic IP
+    Value: !GetAtt WebElasticIp.AllocationId

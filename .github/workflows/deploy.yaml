@@ -1,0 +1,78 @@
+name: Deploy Infrastructure
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Discover default VPC and subnets
+        run: |
+          DEFAULT_VPC_ID=$(aws ec2 describe-vpcs --filters Name=isDefault,Values=true --query "Vpcs[0].VpcId" --output text)
+          SUBNETS=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$DEFAULT_VPC_ID Name=default-for-az,Values=true --query "Subnets[].SubnetId" --output text)
+          SUBNETS_CSV=$(echo "$SUBNETS" | tr '\t' ',')
+
+          echo "DEFAULT_VPC_ID=$DEFAULT_VPC_ID" >> $GITHUB_ENV
+          echo "DEFAULT_SUBNETS_CSV=$SUBNETS_CSV" >> $GITHUB_ENV
+
+      - name: Deploy Security Stack
+        run: |
+          aws cloudformation deploy \
+            --template-file templates/security.yml \
+            --stack-name exam-security-stack \
+            --parameter-overrides VpcId=${{ env.DEFAULT_VPC_ID }}
+
+      - name: Read Security outputs
+        run: |
+          EC2_SG_ID=$(aws cloudformation describe-stacks --stack-name exam-security-stack --query "Stacks[0].Outputs[?OutputKey=='Ec2SecurityGroupId'].OutputValue" --output text)
+          ALB_SG_ID=$(aws cloudformation describe-stacks --stack-name exam-security-stack --query "Stacks[0].Outputs[?OutputKey=='AlbSecurityGroupId'].OutputValue" --output text)
+
+          echo "EC2_SG_ID=$EC2_SG_ID" >> $GITHUB_ENV
+          echo "ALB_SG_ID=$ALB_SG_ID" >> $GITHUB_ENV
+
+      - name: Deploy EC2 Stack
+        run: |
+          aws cloudformation deploy \
+            --template-file templates/ec2.yml \
+            --stack-name exam-ec2-stack \
+            --parameter-overrides Ec2SecurityGroupId=${{ env.EC2_SG_ID }}
+
+      - name: Deploy ALB-ASG Stack
+        run: |
+          aws cloudformation deploy \
+            --template-file templates/alb-asg.yml \
+            --stack-name exam-alb-asg-stack \
+            --parameter-overrides \
+              VpcId=${{ env.DEFAULT_VPC_ID }} \
+              PublicSubnetIds=${{ env.DEFAULT_SUBNETS_CSV }} \
+              AlbSecurityGroupId=${{ env.ALB_SG_ID }} \
+              Ec2SecurityGroupId=${{ env.EC2_SG_ID }}
+
+      - name: Read ALB-ASG outputs
+        run: |
+          ASG_NAME=$(aws cloudformation describe-stacks --stack-name exam-alb-asg-stack --query "Stacks[0].Outputs[?OutputKey=='AutoScalingGroupName'].OutputValue" --output text)
+          LT_ID=$(aws cloudformation describe-stacks --stack-name exam-alb-asg-stack --query "Stacks[0].Outputs[?OutputKey=='LaunchTemplateId'].OutputValue" --output text)
+
+          echo "ASG_NAME=$ASG_NAME" >> $GITHUB_ENV
+          echo "LT_ID=$LT_ID" >> $GITHUB_ENV
+
+      - name: Deploy Automation Stack
+        run: |
+          aws cloudformation deploy \
+            --template-file templates/automation.yml \
+            --stack-name exam-automation-stack \
+            --capabilities CAPABILITY_IAM \
+            --parameter-overrides \
+              AutoScalingGroupName=${{ env.ASG_NAME }} \
+              LaunchTemplateId=${{ env.LT_ID }}

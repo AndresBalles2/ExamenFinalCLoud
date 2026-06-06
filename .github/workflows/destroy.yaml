@@ -1,0 +1,38 @@
+name: Destroy Infrastructure
+
+on:
+  workflow_dispatch:
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Destroy Automation Stack
+        run: |
+          aws cloudformation delete-stack --stack-name exam-automation-stack --region us-east-1 || true
+          aws cloudformation wait stack-delete-complete --stack-name exam-automation-stack --region us-east-1 || true
+
+      - name: Destroy ALB-ASG Stack
+        run: |
+          aws cloudformation delete-stack --stack-name exam-alb-asg-stack --region us-east-1 || true
+          aws cloudformation wait stack-delete-complete --stack-name exam-alb-asg-stack --region us-east-1 || true
+
+      - name: Destroy EC2 Stack
+        run: |
+          aws cloudformation delete-stack --stack-name exam-ec2-stack --region us-east-1 || true
+          aws cloudformation wait stack-delete-complete --stack-name exam-ec2-stack --region us-east-1 || true
+
+      - name: Destroy Security Stack
+        run: |
+          aws cloudformation delete-stack --stack-name exam-security-stack --region us-east-1 || true
+          aws cloudformation wait stack-delete-complete --stack-name exam-security-stack --region us-east-1 || true

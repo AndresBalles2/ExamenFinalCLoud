@@ -1,0 +1,170 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Stack 4 - Scheduled scaling + Launch Template v2 + ASG update
+
+Parameters:
+  AutoScalingGroupName:
+    Type: String
+    Description: Existing Auto Scaling Group name from stack 3
+
+  LaunchTemplateId:
+    Type: String
+    Description: Existing Launch Template Id from stack 3
+
+Resources:
+  LaunchTemplateVersion2:
+    Type: AWS::EC2::LaunchTemplateVersion
+    Properties:
+      LaunchTemplateId: !Ref LaunchTemplateId
+      SourceVersion: "$Latest"
+      VersionDescription: Version 2 created by automation stack
+      LaunchTemplateData:
+        UserData: !Base64 |
+          #!/bin/bash
+          yum update -y
+          yum install -y httpd
+          systemctl enable httpd
+          systemctl start httpd
+          echo "Stack 4 - Launch Template version 2" > /var/www/html/index.html
+
+  ScaleUpMorning:
+    Type: AWS::AutoScaling::ScheduledAction
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroupName
+      DesiredCapacity: 3
+      MinSize: 2
+      MaxSize: 4
+      Recurrence: "0 8 * * MON-FRI"
+      TimeZone: "America/Bogota"
+
+  ScaleUpAfternoon:
+    Type: AWS::AutoScaling::ScheduledAction
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroupName
+      DesiredCapacity: 4
+      MinSize: 2
+      MaxSize: 4
+      Recurrence: "0 14 * * MON-FRI"
+      TimeZone: "America/Bogota"
+
+  ScaleDownEvening:
+    Type: AWS::AutoScaling::ScheduledAction
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroupName
+      DesiredCapacity: 2
+      MinSize: 1
+      MaxSize: 4
+      Recurrence: "0 18 * * MON-FRI"
+      TimeZone: "America/Bogota"
+
+  ScaleDownNight:
+    Type: AWS::AutoScaling::ScheduledAction
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroupName
+      DesiredCapacity: 1
+      MinSize: 1
+      MaxSize: 4
+      Recurrence: "0 22 * * MON-FRI"
+      TimeZone: "America/Bogota"
+
+  AsgUpdateRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: autoscaling-update-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - autoscaling:UpdateAutoScalingGroup
+                Resource: "*"
+
+  AsgUpdateFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 60
+      Role: !GetAtt AsgUpdateRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import urllib.request
+          import boto3
+
+          autoscaling = boto3.client('autoscaling')
+
+          def send(event, context, status, data, reason=''):
+              body = {
+                  'Status': status,
+                  'Reason': reason or f'See CloudWatch Logs: {context.log_stream_name}',
+                  'PhysicalResourceId': context.log_stream_name,
+                  'StackId': event['StackId'],
+                  'RequestId': event['RequestId'],
+                  'LogicalResourceId': event['LogicalResourceId'],
+                  'Data': data,
+              }
+              req = urllib.request.Request(
+                  event['ResponseURL'],
+                  data=json.dumps(body).encode('utf-8'),
+                  method='PUT',
+                  headers={'content-type': ''}
+              )
+              urllib.request.urlopen(req)
+
+          def handler(event, context):
+              props = event.get('ResourceProperties', {})
+              asg_name = props.get('AutoScalingGroupName')
+              lt_id = props.get('LaunchTemplateId')
+              lt_version = str(props.get('LaunchTemplateVersion'))
+
+              try:
+                  if event['RequestType'] in ('Create', 'Update'):
+                      autoscaling.update_auto_scaling_group(
+                          AutoScalingGroupName=asg_name,
+                          LaunchTemplate={
+                              'LaunchTemplateId': lt_id,
+                              'Version': lt_version,
+                          },
+                      )
+                  send(event, context, 'SUCCESS', {'UpdatedVersion': lt_version})
+              except Exception as exc:
+                  send(event, context, 'FAILED', {}, str(exc))
+
+  UpdateAsgToVersion2:
+    Type: Custom::UpdateAsgLaunchTemplateVersion
+    Properties:
+      ServiceToken: !GetAtt AsgUpdateFunction.Arn
+      AutoScalingGroupName: !Ref AutoScalingGroupName
+      LaunchTemplateId: !Ref LaunchTemplateId
+      LaunchTemplateVersion: !GetAtt LaunchTemplateVersion2.VersionNumber
+
+Outputs:
+  LaunchTemplateVersion2Number:
+    Description: Version number created in this stack
+    Value: !GetAtt LaunchTemplateVersion2.VersionNumber
+
+  ScheduledActionScaleUpMorning:
+    Description: Name of first scale-up scheduled action
+    Value: !Ref ScaleUpMorning
+
+  ScheduledActionScaleUpAfternoon:
+    Description: Name of second scale-up scheduled action
+    Value: !Ref ScaleUpAfternoon
+
+  ScheduledActionScaleDownEvening:
+    Description: Name of first scale-down scheduled action
+    Value: !Ref ScaleDownEvening
+
+  ScheduledActionScaleDownNight:
+    Description: Name of second scale-down scheduled action
+    Value: !Ref ScaleDownNight
