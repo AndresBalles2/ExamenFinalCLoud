@@ -20,11 +20,17 @@ jobs:
       - name: Discover default VPC and subnets
         run: |
           DEFAULT_VPC_ID=$(aws ec2 describe-vpcs --filters Name=isDefault,Values=true --query "Vpcs[0].VpcId" --output text)
-          SUBNETS=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$DEFAULT_VPC_ID Name=default-for-az,Values=true --query "Subnets[].SubnetId" --output text)
-          SUBNETS_CSV=$(echo "$SUBNETS" | tr '\t' ',')
+          SUBNETS=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$DEFAULT_VPC_ID --query "Subnets[].SubnetId" --output text)
+          SUBNETS_DISTINCT=$(echo "$SUBNETS" | tr '\t' '\n' | sed '/^$/d' | head -n 2 | paste -sd, -)
+          SUBNET_COUNT=$(echo "$SUBNETS_DISTINCT" | tr ',' '\n' | sed '/^$/d' | wc -l)
+
+          if [ "$SUBNET_COUNT" -lt 2 ]; then
+            echo "Se necesitan al menos 2 subredes en la VPC default para el stack de ALB-ASG. Encontradas: $SUBNET_COUNT"
+            exit 1
+          fi
 
           echo "DEFAULT_VPC_ID=$DEFAULT_VPC_ID" >> $GITHUB_ENV
-          echo "DEFAULT_SUBNETS_CSV=$SUBNETS_CSV" >> $GITHUB_ENV
+          echo "DEFAULT_SUBNETS_CSV=$SUBNETS_DISTINCT" >> $GITHUB_ENV
 
       - name: Deploy Security Stack
         run: |
