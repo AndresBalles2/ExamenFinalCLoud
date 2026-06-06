@@ -20,17 +20,21 @@ jobs:
       - name: Discover default VPC and subnets
         run: |
           DEFAULT_VPC_ID=$(aws ec2 describe-vpcs --filters Name=isDefault,Values=true --query "Vpcs[0].VpcId" --output text)
-          SUBNETS=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$DEFAULT_VPC_ID --query "Subnets[].SubnetId" --output text)
-          SUBNETS_DISTINCT=$(echo "$SUBNETS" | tr '\t' '\n' | sed '/^$/d' | head -n 2 | paste -sd, -)
-          SUBNET_COUNT=$(echo "$SUBNETS_DISTINCT" | tr ',' '\n' | sed '/^$/d' | wc -l)
+          SUBNETS_BY_AZ=$(aws ec2 describe-subnets --filters Name=vpc-id,Values=$DEFAULT_VPC_ID --query "sort_by(Subnets,&AvailabilityZone)[].[AvailabilityZone,SubnetId]" --output text)
+
+          SUBNET1=$(echo "$SUBNETS_BY_AZ" | awk 'NF >= 2 && !seen[$1]++ {print $2}' | sed -n '1p')
+          SUBNET2=$(echo "$SUBNETS_BY_AZ" | awk 'NF >= 2 && !seen[$1]++ {print $2}' | sed -n '2p')
+
+          SUBNET_COUNT=$(printf "%s\n%s\n" "$SUBNET1" "$SUBNET2" | sed '/^$/d' | wc -l)
 
           if [ "$SUBNET_COUNT" -lt 2 ]; then
-            echo "Se necesitan al menos 2 subredes en la VPC default para el stack de ALB-ASG. Encontradas: $SUBNET_COUNT"
+            echo "Se necesitan al menos 2 subredes en distintas AZ dentro de la VPC default para el stack de ALB-ASG. Encontradas: $SUBNET_COUNT"
             exit 1
           fi
 
           echo "DEFAULT_VPC_ID=$DEFAULT_VPC_ID" >> $GITHUB_ENV
-          echo "DEFAULT_SUBNETS_CSV=$SUBNETS_DISTINCT" >> $GITHUB_ENV
+          echo "DEFAULT_SUBNET_1=$SUBNET1" >> $GITHUB_ENV
+          echo "DEFAULT_SUBNET_2=$SUBNET2" >> $GITHUB_ENV
 
       - name: Deploy Security Stack
         run: |
@@ -61,7 +65,8 @@ jobs:
             --stack-name exam-alb-asg-stack \
             --parameter-overrides \
               VpcId=${{ env.DEFAULT_VPC_ID }} \
-              PublicSubnetIds=${{ env.DEFAULT_SUBNETS_CSV }} \
+              PublicSubnetId1=${{ env.DEFAULT_SUBNET_1 }} \
+              PublicSubnetId2=${{ env.DEFAULT_SUBNET_2 }} \
               AlbSecurityGroupId=${{ env.ALB_SG_ID }} \
               Ec2SecurityGroupId=${{ env.EC2_SG_ID }}
 
