@@ -1,0 +1,118 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Stack 3 - ALB + Target Group + Launch Template + ASG + Warm Pool
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Existing VPC Id (for example, your default VPC)
+
+  PublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: At least two subnet IDs in different AZs
+
+  AlbSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security Group Id for ALB (from security stack)
+
+  Ec2SecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security Group Id for ASG instances (from security stack)
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: ""
+    Description: Optional Key Pair name
+
+  DesiredCapacity:
+    Type: Number
+    Default: 2
+    MinValue: 1
+    MaxValue: 4
+
+Conditions:
+  HasKeyName: !Not [ !Equals [ !Ref KeyName, "" ] ]
+
+Resources:
+  AppLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups:
+        - !Ref AlbSecurityGroupId
+      Subnets: !Ref PublicSubnetIds
+
+  AppTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+      HealthCheckPath: /
+      TargetType: instance
+
+  AppListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref AppTargetGroup
+      LoadBalancerArn: !Ref AppLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub ${AWS::StackName}-lt
+      LaunchTemplateData:
+        ImageId: ami-0cca150d127c2216f
+        InstanceType: t3.micro
+        KeyName: !If [ HasKeyName, !Ref KeyName, !Ref AWS::NoValue ]
+        SecurityGroupIds:
+          - !Ref Ec2SecurityGroupId
+        UserData: !Base64 |
+          #!/bin/bash
+          yum update -y
+          yum install -y httpd
+          systemctl enable httpd
+          systemctl start httpd
+          echo "Hello from ALB + ASG" > /var/www/html/index.html
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AutoScalingGroupName: !Sub ${AWS::StackName}-asg
+      MinSize: 1
+      MaxSize: 4
+      DesiredCapacity: !Ref DesiredCapacity
+      VPCZoneIdentifier: !Ref PublicSubnetIds
+      TargetGroupARNs:
+        - !Ref AppTargetGroup
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+
+  AsgWarmPool:
+    Type: AWS::AutoScaling::WarmPool
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      MinSize: 1
+      PoolState: Stopped
+
+Outputs:
+  LoadBalancerDNS:
+    Description: DNS name of the created Application Load Balancer
+    Value: !GetAtt AppLoadBalancer.DNSName
+
+  AutoScalingGroupName:
+    Description: Name of created Auto Scaling Group
+    Value: !Ref AutoScalingGroup
+
+  LaunchTemplateId:
+    Description: Launch Template Id used by ASG
+    Value: !Ref LaunchTemplate
+
+  LaunchTemplateLatestVersion:
+    Description: Latest launch template version in stack 3
+    Value: !GetAtt LaunchTemplate.LatestVersionNumber
