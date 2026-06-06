@@ -23,7 +23,7 @@ Parameters:
     Description: Security Group Id for ASG instances (from security stack)
 
   KeyName:
-    Type: AWS::EC2::KeyPair::KeyName
+    Type: String
     Default: ""
     Description: Optional Key Pair name
 
@@ -96,8 +96,9 @@ Resources:
       TargetGroupARNs:
         - !Ref AppTargetGroup
       LaunchTemplate:
-        LaunchTemplateId: !Ref LaunchTemplate
-        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+        LaunchTemplateSpecification:
+          LaunchTemplateId: !Ref LaunchTemplate
+          Version: !GetAtt LaunchTemplate.LatestVersionNumber
 
   AsgWarmPool:
     Type: AWS::AutoScaling::WarmPool
