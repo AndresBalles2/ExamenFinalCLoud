@@ -1,125 +1,38 @@
-name: Deploy Infrastructure
+name: Destroy Infrastructure
 
 on:
-workflow_dispatch:
+  workflow_dispatch:
 
 jobs:
-deploy:
-runs-on: ubuntu-latest
+  destroy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
 
-  - name: Checkout repository
-    uses: actions/checkout@v4
+      - name: Destroy Automation Stack
+        run: |
+          aws cloudformation delete-stack --stack-name exam-automation-stack --region us-east-1 || true
+          aws cloudformation wait stack-delete-complete --stack-name exam-automation-stack --region us-east-1 || true
 
-  - name: Configure AWS credentials
-    uses: aws-actions/configure-aws-credentials@v4
-    with:
-      aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      aws-region: us-east-1
+      - name: Destroy ALB-ASG Stack
+        run: |
+          aws cloudformation delete-stack --stack-name exam-alb-asg-stack --region us-east-1 || true
+          aws cloudformation wait stack-delete-complete --stack-name exam-alb-asg-stack --region us-east-1 || true
 
-  - name: Discover default VPC and subnets
-    run: |
-      DEFAULT_VPC_ID=$(aws ec2 describe-vpcs \
-        --filters Name=isDefault,Values=true \
-        --query "Vpcs[0].VpcId" \
-        --output text)
+      - name: Destroy EC2 Stack
+        run: |
+          aws cloudformation delete-stack --stack-name exam-ec2-stack --region us-east-1 || true
+          aws cloudformation wait stack-delete-complete --stack-name exam-ec2-stack --region us-east-1 || true
 
-      SUBNETS_BY_AZ=$(aws ec2 describe-subnets \
-        --filters Name=vpc-id,Values=$DEFAULT_VPC_ID \
-        --query "sort_by(Subnets,&AvailabilityZone)[].[AvailabilityZone,SubnetId]" \
-        --output text)
-
-      SUBNET1=$(echo "$SUBNETS_BY_AZ" | awk 'NF >= 2 && !seen[$1]++ {print $2}' | sed -n '1p')
-      SUBNET2=$(echo "$SUBNETS_BY_AZ" | awk 'NF >= 2 && !seen[$1]++ {print $2}' | sed -n '2p')
-
-      SUBNET_COUNT=$(printf "%s\n%s\n" "$SUBNET1" "$SUBNET2" | sed '/^$/d' | wc -l)
-
-      if [ "$SUBNET_COUNT" -lt 2 ]; then
-        echo "Se necesitan al menos 2 subredes en distintas AZ"
-        exit 1
-      fi
-
-      echo "DEFAULT_VPC_ID=$DEFAULT_VPC_ID" >> $GITHUB_ENV
-      echo "DEFAULT_SUBNET_1=$SUBNET1" >> $GITHUB_ENV
-      echo "DEFAULT_SUBNET_2=$SUBNET2" >> $GITHUB_ENV
-
-  - name: Get latest Amazon Linux AMI
-    run: |
-      AMI_ID=$(aws ssm get-parameter \
-        --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 \
-        --query "Parameter.Value" \
-        --output text)
-
-      echo "AMI_ID=$AMI_ID" >> $GITHUB_ENV
-
-  - name: Deploy Security Stack
-    run: |
-      aws cloudformation deploy \
-        --template-file templates/security.yml \
-        --stack-name exam-security-stack \
-        --parameter-overrides \
-          VpcId=${{ env.DEFAULT_VPC_ID }}
-
-  - name: Read Security outputs
-    run: |
-      EC2_SG_ID=$(aws cloudformation describe-stacks \
-        --stack-name exam-security-stack \
-        --query "Stacks[0].Outputs[?OutputKey=='Ec2SecurityGroupId'].OutputValue" \
-        --output text)
-
-      ALB_SG_ID=$(aws cloudformation describe-stacks \
-        --stack-name exam-security-stack \
-        --query "Stacks[0].Outputs[?OutputKey=='AlbSecurityGroupId'].OutputValue" \
-        --output text)
-
-      echo "EC2_SG_ID=$EC2_SG_ID" >> $GITHUB_ENV
-      echo "ALB_SG_ID=$ALB_SG_ID" >> $GITHUB_ENV
-
-  - name: Deploy EC2 Stack
-    run: |
-      aws cloudformation deploy \
-        --template-file templates/ec2.yml \
-        --stack-name exam-ec2-stack \
-        --parameter-overrides \
-          Ec2SecurityGroupId=${{ env.EC2_SG_ID }} \
-          AmiId=${{ env.AMI_ID }}
-
-  - name: Deploy ALB-ASG Stack
-    run: |
-      aws cloudformation deploy \
-        --template-file templates/alb-asg.yml \
-        --stack-name exam-alb-asg-stack \
-        --parameter-overrides \
-          VpcId=${{ env.DEFAULT_VPC_ID }} \
-          PublicSubnetId1=${{ env.DEFAULT_SUBNET_1 }} \
-          PublicSubnetId2=${{ env.DEFAULT_SUBNET_2 }} \
-          AlbSecurityGroupId=${{ env.ALB_SG_ID }} \
-          Ec2SecurityGroupId=${{ env.EC2_SG_ID }} \
-          AmiId=${{ env.AMI_ID }}
-
-  - name: Read ALB-ASG outputs
-    run: |
-      ASG_NAME=$(aws cloudformation describe-stacks \
-        --stack-name exam-alb-asg-stack \
-        --query "Stacks[0].Outputs[?OutputKey=='AutoScalingGroupName'].OutputValue" \
-        --output text)
-
-      LT_ID=$(aws cloudformation describe-stacks \
-        --stack-name exam-alb-asg-stack \
-        --query "Stacks[0].Outputs[?OutputKey=='LaunchTemplateId'].OutputValue" \
-        --output text)
-
-      echo "ASG_NAME=$ASG_NAME" >> $GITHUB_ENV
-      echo "LT_ID=$LT_ID" >> $GITHUB_ENV
-
-  - name: Deploy Automation Stack
-    run: |
-      aws cloudformation deploy \
-        --template-file templates/automation.yml \
-        --stack-name exam-automation-stack \
-        --capabilities CAPABILITY_IAM \
-        --parameter-overrides \
-          AutoScalingGroupName=${{ env.ASG_NAME }} \
-          LaunchTemplateId=${{ env.LT_ID }}
+      - name: Destroy Security Stack
+        run: |
+          aws cloudformation delete-stack --stack-name exam-security-stack --region us-east-1 || true
+          aws cloudformation wait stack-delete-complete --stack-name exam-security-stack --region us-east-1 || true
