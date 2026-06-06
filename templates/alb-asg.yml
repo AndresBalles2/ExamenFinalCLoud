@@ -6,9 +6,13 @@ Parameters:
     Type: AWS::EC2::VPC::Id
     Description: Existing VPC Id (for example, your default VPC)
 
-  PublicSubnetIds:
-    Type: List<AWS::EC2::Subnet::Id>
-    Description: At least two subnet IDs in different AZs
+  PublicSubnetId1:
+    Type: AWS::EC2::Subnet::Id
+    Description: First public subnet in a different AZ
+
+  PublicSubnetId2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Second public subnet in a different AZ
 
   AlbSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
@@ -40,7 +44,9 @@ Resources:
       Type: application
       SecurityGroups:
         - !Ref AlbSecurityGroupId
-      Subnets: !Ref PublicSubnetIds
+      Subnets:
+        - !Ref PublicSubnetId1
+        - !Ref PublicSubnetId2
 
   AppTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
@@ -84,7 +90,9 @@ Resources:
       MinSize: 1
       MaxSize: 4
       DesiredCapacity: !Ref DesiredCapacity
-      VPCZoneIdentifier: !Ref PublicSubnetIds
+      VPCZoneIdentifier:
+        - !Ref PublicSubnetId1
+        - !Ref PublicSubnetId2
       TargetGroupARNs:
         - !Ref AppTargetGroup
       LaunchTemplate:
