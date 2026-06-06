@@ -15,17 +15,24 @@ Parameters:
     Description: Second public subnet in a different AZ
 
   AlbSecurityGroupId:
-    Type: AWS::EC2::SecurityGroup::Id
-    Description: Security Group Id for ALB (from security stack)
+    Type: String
+    Default: ""
+    Description: Optional Security Group Id for ALB (leave empty to create one)
 
   Ec2SecurityGroupId:
-    Type: AWS::EC2::SecurityGroup::Id
-    Description: Security Group Id for ASG instances (from security stack)
+    Type: String
+    Default: ""
+    Description: Optional Security Group Id for ASG instances (leave empty to create one)
 
   KeyName:
     Type: String
     Default: ""
     Description: Optional Key Pair name
+
+  LatestAmi:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+    Description: Amazon Linux 2 AMI (SSM parameter)
 
   DesiredCapacity:
     Type: Number
@@ -35,6 +42,8 @@ Parameters:
 
 Conditions:
   HasKeyName: !Not [ !Equals [ !Ref KeyName, "" ] ]
+  NoAlbSG: !Equals [ !Ref AlbSecurityGroupId, "" ]
+  NoEc2SG: !Equals [ !Ref Ec2SecurityGroupId, "" ]
 
 Resources:
   AppLoadBalancer:
@@ -42,8 +51,7 @@ Resources:
     Properties:
       Scheme: internet-facing
       Type: application
-      SecurityGroups:
-        - !Ref AlbSecurityGroupId
+      SecurityGroups: !If [ NoAlbSG, [ !Ref AlbSecurityGroupCreated ], [ !Ref AlbSecurityGroupId ] ]
       Subnets:
         - !Ref PublicSubnetId1
         - !Ref PublicSubnetId2
@@ -71,11 +79,10 @@ Resources:
     Type: AWS::EC2::LaunchTemplate
     Properties:
       LaunchTemplateData:
-        ImageId: ami-0cca150d127c2216f
+        ImageId: !Ref LatestAmi
         InstanceType: t3.micro
         KeyName: !If [ HasKeyName, !Ref KeyName, !Ref AWS::NoValue ]
-        SecurityGroupIds:
-          - !Ref Ec2SecurityGroupId
+        SecurityGroupIds: !If [ NoEc2SG, [ !Ref Ec2SecurityGroupCreated ], [ !Ref Ec2SecurityGroupId ] ]
         UserData: !Base64 |
           #!/bin/bash
           yum update -y
@@ -106,6 +113,34 @@ Resources:
       AutoScalingGroupName: !Ref AutoScalingGroup
       MinSize: 1
       PoolState: Stopped
+
+  AlbSecurityGroupCreated:
+    Condition: NoAlbSG
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ALB (created by stack)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  Ec2SecurityGroupCreated:
+    Condition: NoEc2SG
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for EC2 instances (created by stack)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
 
 Outputs:
   LoadBalancerDNS:
